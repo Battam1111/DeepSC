@@ -21,3 +21,4 @@ checkpoints/
 txt/
 europarl.tgz
 outputs/
+DeepSC/lightning_logs/
