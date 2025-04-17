@@ -1,0 +1,7 @@
+# configs/train/awgn.yaml
+batch_size: 128
+lr: 3e-4          # 峰值 lr
+warmup: 8000
+lr_type: inverse_sqrt
+epochs: 30
+lambda_mi: 0.0009

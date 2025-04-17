@@ -1,0 +1,10 @@
+# 公共基础配置
+# 注意：Hydra 默认列表必须包含 _self_，否则会有警告
+defaults:
+  - _self_
+  - model: deepsc
+  - data: europarl
+  - train: awgn
+
+seed: 42
+precision: 16        # AMP 自动混合精度

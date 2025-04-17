@@ -1,0 +1,21 @@
+# -*- yaml -*-
+# EuroParl 数据配置（最终版，彻底杜绝 interpolation 错误）
+
+# --------------------------------------------------
+# 规则：
+#   1) 如果设置了环境变量 EP_DATA，则全部路径都从 EP_DATA 取；
+#   2) 若未设置，则默认使用 <启动脚本所在目录>/data 作为根目录；
+# --------------------------------------------------
+
+# ① 数据根目录（不再被其他字段引用，仅供调试查看）
+data_root: ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}
+
+# ② 具体文件路径 —— 直接把“根目录逻辑”写到每一行，避免再经由 data_root
+train_pkl:  ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/train_data.pkl
+val_pkl:    ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/test_data.pkl
+vocab_json: ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/vocab.json
+
+# ③ 其余与数据无关的配置保持不变
+channel:    AWGN
+pad_idx:    0
+vocab_size: 60000

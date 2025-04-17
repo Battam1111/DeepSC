@@ -1,0 +1,6 @@
+ft:
+  epochs: 5          # 迁移只需少量 epoch
+mode: channel        # channel / domain
+new_channel: AWGN    # mode=channel 时指定
+
+# 其余字段继承 base.yaml

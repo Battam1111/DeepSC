@@ -17,3 +17,7 @@ checkpoints/
 /checkpoints/deepsc-mi-awgn/*
 /checkpoints/deepsc-mi/Rayleigh/*
 /checkpoints/deepsc-Rayleigh/* 
+
+txt/
+europarl.tgz
+outputs/

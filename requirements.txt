@@ -1,6 +1,10 @@
-torch
+torch>=2.0
+torchdata                                         # 新增
+pytorch-lightning>=2.2
+hydra-core
 nltk
 w3lib
 tqdm
-sklearn
-bert4keras==0.4.2
+scikit-learn
+transformers>=4.38
+sentencepiece
