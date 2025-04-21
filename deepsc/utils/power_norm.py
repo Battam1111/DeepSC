@@ -1,5 +1,11 @@
-# deepsc/utils/power_norm.py - 改进的功率归一化
+# -*- coding: utf-8 -*-
+"""
+功率归一化
+========
+提供符合论文要求的功率归一化函数，确保传输符号的平均功率为指定值。
+"""
 import torch
+import math
 
 def power_normalize(x: torch.Tensor, target_power: float = 1.0, dim: int = -1) -> torch.Tensor:
     """

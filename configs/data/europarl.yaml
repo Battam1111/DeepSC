@@ -1,5 +1,6 @@
+# configs/data/europarl.yaml - 更新的数据配置
 # -*- yaml -*-
-# EuroParl 数据配置（最终版，彻底杜绝 interpolation 错误）
+# EuroParl 数据配置
 
 # --------------------------------------------------
 # 规则：
@@ -10,7 +11,7 @@
 # ① 数据根目录（不再被其他字段引用，仅供调试查看）
 data_root: ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}
 
-# ② 具体文件路径 —— 直接把“根目录逻辑”写到每一行，避免再经由 data_root
+# ② 具体文件路径 ---- 直接把"根目录逻辑"写到每一行，避免再经由 data_root
 train_pkl:  ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/train_data.pkl
 val_pkl:    ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/test_data.pkl
 vocab_json: ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/vocab.json
@@ -18,4 +19,4 @@ vocab_json: ${oc.env:EP_DATA, ${hydra:runtime.cwd}/data}/europarl/vocab.json
 # ③ 其余与数据无关的配置保持不变
 channel:    AWGN
 pad_idx:    0
-vocab_size: 60000
+# 移除硬编码的 vocab_size，改为动态获取
