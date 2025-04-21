@@ -15,3 +15,6 @@ mine_warmup: 1000    # MINE预热期
 # SNR范围
 snr_low: 0        # 训练时随机采样的最低SNR(dB)
 snr_high: 15      # 训练时随机采样的最高SNR(dB)
+
+# 梯度裁剪
+grad_clip: 1.0    # 梯度裁剪值

@@ -1,4 +1,4 @@
-# deepsc/models/mine.py - 完善的互信息估计器
+# deepsc/models/mine.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

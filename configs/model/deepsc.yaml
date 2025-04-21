@@ -1,3 +1,4 @@
+# configs/model/deepsc.yaml - 确保符合论文的模型配置
 # ---- Transformer 主体 ----
 vocab_size: ${data.vocab_size}
 max_len   : 32
@@ -9,4 +10,7 @@ dropout   : 0.1
 
 # ---- Channel Enc/Dec ----
 latent_dim: 16       # 符合论文
-pad_idx    : ${data.pad_idx}
+pad_idx   : ${data.pad_idx}
+
+# ---- 梯度裁剪 ----
+grad_clip : 1.0      # 梯度裁剪的默认值

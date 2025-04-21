@@ -1,7 +1,19 @@
-# deepsc/engine/lit_module.py - 改进的训练策略
+# -*- coding: utf-8 -*-
+"""
+LightningModule：DeepSC 端到端训练封装
+======================================
+包含以下功能：
+1. 双路优化器：主网络和MINE分别优化
+2. 自定义学习率调度：支持 inverse_sqrt 和 linear_decay
+3. 手动梯度裁剪：在手动优化中实现梯度裁剪
+4. 互信息估计：计算与优化互信息下界
+5. 训练日志记录：记录损失、BLEU分数等指标
+"""
+
 import itertools, math, torch
 import pytorch_lightning as pl
 from torch.optim import Adam
+from torch.nn.utils import clip_grad_norm_
 
 from deepsc.models.transformer import DeepSC
 from deepsc.models.mine import MINE
@@ -14,11 +26,12 @@ class LitDeepSC(pl.LightningModule):
     
     使用PyTorch Lightning框架封装DeepSC模型，实现端到端训练。
     包含交替优化MINE网络和主网络的策略，以及灵活的学习率调度。
+    在手动优化中实现梯度裁剪，解决自动裁剪不兼容问题。
     
     参数:
         cfg: 配置对象，包含模型参数和训练超参数
     """
-    automatic_optimization: bool = False
+    automatic_optimization: bool = False  # 使用手动优化
 
     # --------------------------- 初始化 --------------------------- #
     def __init__(self, cfg):
@@ -43,6 +56,9 @@ class LitDeepSC(pl.LightningModule):
         self.lambda_mi = cfg.train.lambda_mi
         self.mine_extra_steps = cfg.train.get('mine_extra_steps', 1)   # 每次更新时，MINE可额外训练几步
         self.mine_warmup = cfg.train.get('mine_warmup', 1000)          # MINE 预热期
+        
+        # 梯度裁剪值
+        self.grad_clip = cfg.model.get('grad_clip', 1.0)
         
         # 动态 SNR 范围
         self.snr_low = cfg.train.get('snr_low', 10)
@@ -71,6 +87,7 @@ class LitDeepSC(pl.LightningModule):
         单步训练逻辑
         
         包括主网络更新和MINE网络更新，使用手动优化策略。
+        实现手动梯度裁剪，替代自动梯度裁剪功能。
         
         参数:
             batch: 当前批次数据
@@ -103,6 +120,10 @@ class LitDeepSC(pl.LightningModule):
                 opt_mine.zero_grad()
                 mi_lb_mine = self.mine(tx_f.detach(), rx_f.detach())
                 self.manual_backward(-mi_lb_mine)   # 最大化下界
+                
+                # 手动梯度裁剪 (MINE网络)
+                clip_grad_norm_(self.mine.parameters(), self.grad_clip)
+                
                 opt_mine.step()
         
         # ③ 更新主网络
@@ -111,6 +132,10 @@ class LitDeepSC(pl.LightningModule):
         
         opt_main.zero_grad()
         self.manual_backward(loss)
+        
+        # 手动梯度裁剪 (主网络)
+        clip_grad_norm_(self.model.parameters(), self.grad_clip)
+        
         opt_main.step()
         
         # ④ 记录训练指标
@@ -210,6 +235,8 @@ class LitDeepSC(pl.LightningModule):
     def _sample_noise(self) -> float:
         """
         随机采样信噪比并转换为噪声方差
+        
+        从配置的SNR范围内均匀采样，然后转换为噪声标准差。
         
         返回:
             噪声标准差 σ

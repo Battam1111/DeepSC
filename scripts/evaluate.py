@@ -1,4 +1,4 @@
-# scripts/evaluate.py - 完善的评估脚本
+# scripts/evaluate.py - 修正后的评估脚本
 # -*- coding: utf-8 -*-
 """
 评估脚本

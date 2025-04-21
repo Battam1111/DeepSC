@@ -1,10 +1,10 @@
-# scripts/train.py - 改进的训练脚本
 # -*- coding: utf-8 -*-
 """
 Hydra + Lightning 一键训练
 ===========================
 
 改进版训练脚本，支持更多的配置选项和更好的错误处理。
+手动优化模式下不使用自动梯度裁剪，而是在模型内部实现。
 """
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -70,6 +70,13 @@ def main(cfg: DictConfig):
     except ValueError as e:
         raise ValueError(f"无效的信道类型 '{cfg.data.channel}'。请确保已在 deepsc/models/channel.py 中注册。") from e
 
+    # ---------- 4. 将梯度裁剪值传递给模型 ----------
+    # 因为我们使用手动优化，所以在模型中应用梯度裁剪而非在 Trainer 中
+    if "grad_clip" in cfg:
+        cfg.model.grad_clip = cfg.grad_clip
+    else:
+        cfg.model.grad_clip = 1.0  # 默认梯度裁剪值
+
     print(f"配置摘要:\n"
           f"  • 模型: {cfg.model.get('_target_', 'DeepSC')}\n"
           f"  • 词表大小: {cfg.model.vocab_size}\n"
@@ -77,9 +84,10 @@ def main(cfg: DictConfig):
           f"  • 训练批大小: {cfg.train.batch_size}\n"
           f"  • 学习率: {cfg.train.lr}\n"
           f"  • 互信息权重: {cfg.train.lambda_mi}\n"
+          f"  • 梯度裁剪值: {cfg.model.grad_clip}\n"
           f"  • 设备: {'GPU' if torch.cuda.is_available() else 'CPU'}\n")
 
-    # ---------- 4. 构建 DataLoader ----------
+    # ---------- 5. 构建 DataLoader ----------
     print("加载数据...")
     
     train_loader = make_dataloader(
@@ -100,7 +108,7 @@ def main(cfg: DictConfig):
     print(f"训练集大小: {len(train_loader.dataset)} 句")
     print(f"验证集大小: {len(val_loader.dataset)} 句")
 
-    # ---------- 5. Lightning 训练 ----------
+    # ---------- 6. Lightning 训练 ----------
     print("初始化模型与训练器...")
     
     lit_model = LitDeepSC(cfg)
@@ -140,7 +148,7 @@ def main(cfg: DictConfig):
         default_hp_metric = False,
     )
 
-    # 训练器配置
+    # 训练器配置 - 移除 gradient_clip_val 参数，因为我们使用手动优化
     trainer = pl.Trainer(
         max_epochs      = cfg.train.epochs,
         precision       = cfg.precision,
@@ -150,7 +158,7 @@ def main(cfg: DictConfig):
         logger          = logger,
         log_every_n_steps = 50,
         val_check_interval = cfg.get("val_check_interval", 0.25), # 每1/4epoch验证一次
-        gradient_clip_val = cfg.get("grad_clip", 1.0),  # 梯度裁剪
+        # 移除 gradient_clip_val，因为我们使用手动优化
     )
     
     # 训练

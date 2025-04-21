@@ -1,4 +1,4 @@
-# scripts/finetune.py - 完善的迁移学习脚本
+# scripts/finetune.py - 更新后的迁移学习脚本
 # -*- coding: utf-8 -*-
 """
 一键迁移学习
@@ -69,6 +69,14 @@ def main(cfg: DictConfig):
         # 手动创建模型并加载状态
         lit = LitDeepSC(cfg)
         lit.load_state_dict(checkpoint['state_dict'])
+    
+    # 传递梯度裁剪参数
+    if hasattr(cfg, 'grad_clip'):
+        lit.grad_clip = cfg.grad_clip
+    elif hasattr(cfg.model, 'grad_clip'):
+        lit.grad_clip = cfg.model.grad_clip
+    else:
+        lit.grad_clip = 1.0  # 默认值
         
     print(f"原模型可训练参数数量: {count_trainable_params(lit):,}")
 
@@ -195,7 +203,7 @@ def main(cfg: DictConfig):
         mode='max',
     )
 
-    # 配置训练器
+    # 配置训练器 - 不使用自动梯度裁剪
     print(f"开始迁移学习 (epochs={cfg.ft.epochs})...")
     trainer = pl.Trainer(
         max_epochs        = cfg.ft.epochs,
@@ -206,6 +214,7 @@ def main(cfg: DictConfig):
         log_every_n_steps = 50,
         callbacks         = [checkpoint_callback, early_stop_callback],
         val_check_interval = 0.5,  # 每半个epoch验证一次
+        # 不使用自动梯度裁剪，因为我们使用手动优化和手动裁剪
     )
     
     # 训练
