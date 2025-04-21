@@ -290,20 +290,7 @@ bash scripts/download_and_preprocess.sh
 
 ```bash
 # 严格两阶段训练 - AWGN信道
-python -m scripts.train_phase \
-    data.channel=AWGN \
-    train.mine_epochs=10 \
-    train.epochs=30 \
-    train.batch_size=128 \
-    train.lr=3e-4 \
-    train.lambda_mi=0.01 \
-    train.snr_low=0 \
-    train.snr_high=15 \
-    model.n_layers=3 \
-    model.n_heads=8 \
-    model.d_model=512 \
-    model.d_ff=2048 \
-    model.latent_dim=16
+python -m scripts.train_phase
 ```
 
 训练完成后，将在 `checkpoints/` 目录生成最佳模型检查点，形如 `best_model_epochX.pt`。
@@ -311,9 +298,8 @@ python -m scripts.train_phase \
 ### 3. 在AWGN信道上评估模型
 
 ```bash
-# 将 X 替换为实际的最佳模型轮数
 python -m scripts.evaluate \
-    ckpt_path=checkpoints/best_model_epochX.pt \
+    ckpt_path=checkpoints_phase/best_model.pt \
     strict_model=True \
     data.channel=AWGN
 ```
@@ -323,9 +309,8 @@ python -m scripts.evaluate \
 使用在AWGN上训练的模型，迁移到瑞利信道：
 
 ```bash
-# 将 X 替换为AWGN上训练的最佳模型轮数
 python -m scripts.finetune \
-    ckpt_path=checkpoints/best_model_epochX.pt \
+    ckpt_path=checkpoints_phase/best_model.pt \
     mode=channel \
     new_channel=RAYLEIGH \
     strict_model=True \
@@ -351,7 +336,7 @@ python -m scripts.evaluate \
 ```bash
 # 比较 AWGN 信道上的性能
 python -m scripts.compare_baselines \
-    ckpt_path=checkpoints/best_model_epochX.pt \
+    ckpt_path=checkpoints_phase/best_model.pt \
     strict_model=True \
     data.channel=AWGN
 
