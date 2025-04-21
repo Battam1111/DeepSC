@@ -1,3 +1,7 @@
+# ================================================================================
+# 文件: /home/star/Yanjun/PolyUCourse/DeepSC/configs/base.yaml
+# (已修改，添加顶层 strict_model 参数)
+# ----------------------------------------------------------
 # 公共基础配置
 # 注意：Hydra 默认列表必须包含 _self_，否则会有警告
 defaults:
@@ -5,8 +9,14 @@ defaults:
   - model: deepsc
   - data: europarl
   - train: awgn
+  # 可以考虑添加一个 eval 配置组的默认值，如果评估有特定参数
+  # - eval: default
 
-ckpt_path: lightning_logs/version_0/checkpoints/best-epoch=10-val_bleu=0.058.ckpt
-
+# --- 顶层参数 ---
+ckpt_path: lightning_logs/version_0/checkpoints/best-epoch=10-val_bleu=0.058.ckpt # 默认检查点路径 (可被覆盖)
 seed: 42
-precision: 16        # AMP 自动混合精度
+precision: 16         # AMP 自动混合精度 ('16', 'bf16', '32', '64')
+
+# 新增：用于指示是否加载或处理严格版本模型的标志 (脚本使用 cfg.get("strict_model"))
+# 在这里设置默认值，允许命令行覆盖
+strict_model: false   # 默认为 False，表示使用标准 LitDeepSC 流程

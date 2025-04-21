@@ -21,4 +21,6 @@ checkpoints/
 txt/
 europarl.tgz
 outputs/
-lightning_logs/
+logs/
+checkpoints_phase/
+evaluation_results/
