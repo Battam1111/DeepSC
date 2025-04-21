@@ -59,8 +59,8 @@ class PositionalEncoding(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     """
-    多头注意力机制
-    
+    多头注意力机制 (已修复 AMP 兼容性)
+
     参数:
         d_model: 模型维度
         n_heads: 注意力头数
@@ -69,52 +69,64 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, n_heads, dropout=0.1):
         super().__init__()
         assert d_model % n_heads == 0, "d_model必须能被n_heads整除"
-        
+
         self.d_k = d_model // n_heads
         self.n_heads = n_heads
         self.d_model = d_model
-        
+
         # 线性变换层
         self.q_linear = nn.Linear(d_model, d_model)
         self.k_linear = nn.Linear(d_model, d_model)
         self.v_linear = nn.Linear(d_model, d_model)
         self.output_linear = nn.Linear(d_model, d_model)
-        
+
         self.dropout = nn.Dropout(dropout)
-    
+
     def forward(self, q, k, v, mask=None):
         """
         多头注意力机制前向传播
-        
+
         参数:
             q: [batch, seq_len_q, d_model] 查询
             k: [batch, seq_len_k, d_model] 键
             v: [batch, seq_len_v, d_model] 值
-            mask: [batch, 1, seq_len_q, seq_len_k] 掩码
-            
+            mask: [batch, 1, seq_len_q, seq_len_k] or [batch, 1, 1, seq_len_k] 布尔掩码
+                  约定：模型生成的 mask 中 True 表示 *有效* 位置，False 表示 *无效* (padding/future) 位置。
+                  masked_fill 需要填充 True 的位置，所以我们需要填充 mask 为 False 的地方。
+
         返回:
             [batch, seq_len_q, d_model] 注意力输出
         """
         batch_size = q.size(0)
-        
-        # 线性变换
+
+        # 线性变换并切分头: [B, L, D] -> [B, H, L, Dk]
         q = self.q_linear(q).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
         k = self.k_linear(k).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
         v = self.v_linear(v).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
-        
-        # 缩放点积注意力
+
+        # 缩放点积注意力: scores [B, H, Lq, Lk]
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        
+
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-        
+            # 获取 scores 张量当前的数据类型（可能是 float32 或 float16）
+            # 并获取该类型能表示的最小值
+            fill_value = torch.finfo(scores.dtype).min
+            # 根据约定，mask 中 True 是有效位，False 是无效位
+            # masked_fill 要求填充 True 的位置，所以我们填充 mask == False 的位置
+            # PyTorch 会自动广播 mask (例如 [B, 1, 1, Lk] -> [B, H, Lq, Lk])
+            scores = scores.masked_fill(mask == False, fill_value) # <--- 修改此行
+
         attn_weights = torch.softmax(scores, dim=-1)
+        # 添加 nan_to_num 以防止因整行/列被屏蔽导致 softmax 输出 NaN
+        attn_weights = torch.nan_to_num(attn_weights)
         attn_weights = self.dropout(attn_weights)
-        
-        # 计算加权和
+
+        # 计算加权和: context [B, H, Lq, Dk]
         output = torch.matmul(attn_weights, v)
+
+        # 合并头: [B, H, Lq, Dk] -> [B, Lq, D]
         output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
-        
+
         return self.output_linear(output)
 
 class FeedForward(nn.Module):
