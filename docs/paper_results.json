@@ -1,10 +1,10 @@
 {
     "0": {
-      "bleu": 0.42,
+      "bleu": 0.60,
       "description": "DeepSC BLEU-1 score at SNR=0dB"
     },
     "3": {
-      "bleu": 0.68,
+      "bleu": 0.81,
       "description": "DeepSC BLEU-1 score at SNR=3dB"
     },
     "6": {

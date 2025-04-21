@@ -1,0 +1,23 @@
+# ===========================================================
+# 文件: configs/finetune.yaml
+# -----------------------------------------------------------
+# finetune.py 脚本的主配置文件
+# 通过组合 base 和 finetune/base 来构建完整的配置
+# ===========================================================
+
+defaults:
+  - base                  # 继承 configs/base.yaml 的所有设置 (seed, precision, model, data, train defaults)
+  - finetune: base       # 将 configs/finetune/base.yaml 的内容加载到 'finetune' 配置组下
+  - _self_                # 允许在此文件中直接覆盖或添加配置
+
+# --- 可以在这里覆盖来自 base 或 finetune/base 的特定默认值 ---
+# 例如，如果微调默认使用不同的批大小或训练轮数：
+# train:
+#   batch_size: 64 # 覆盖 base.yaml 中 train 配置组的 batch_size
+
+# finetune:
+#   epochs: 10     # 覆盖 finetune/base.yaml 中 finetune 配置组的 epochs
+
+# --- 可以在这里添加 finetune.py 特有的其他顶层参数 ---
+# 例如，如果脚本需要一个额外的参数：
+# some_other_finetune_param: value

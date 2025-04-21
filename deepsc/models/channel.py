@@ -130,108 +130,142 @@ class AWGNChannel(BaseChannel):
 @register_channel('RAYLEIGH')
 class RayleighChannel(BaseChannel):
     """
-    瑞利衰落信道
-    
+    瑞利衰落信道 (已修复 clamp_abs 错误)
+
     模型: y = h*x + n，其中h ~ CN(0,1)，n ~ CN(0,n_var)
-    
+
     参数:
         perfect_csi: 是否假设完美信道状态信息(CSI)
     """
     def __init__(self, perfect_csi: bool = True):
         super().__init__()
         self.perfect_csi = perfect_csi
-        
+
     def forward(self, tx: torch.Tensor, n_var: float) -> torch.Tensor:
         """
         瑞利信道传播
-        
+
         参数:
-            tx: [batch, seq_len, latent_dim] 发送符号
+            tx: [batch, seq_len, latent_dim] 发送符号 (假定为实数)
             n_var: 噪声方差
-            
+
         返回:
-            [batch, seq_len, latent_dim] 接收符号
+            [batch, seq_len, latent_dim] 接收符号 (实数部分)
         """
-        # 生成复高斯随机变量作为信道系数
-        h_real = torch.randn_like(tx) / math.sqrt(2)
-        h_imag = torch.randn_like(tx) / math.sqrt(2)
-        h = torch.complex(h_real, h_imag)
-        
-        # 添加高斯噪声
-        noise_real = torch.randn_like(tx) * math.sqrt(n_var/2)
-        noise_imag = torch.randn_like(tx) * math.sqrt(n_var/2)
+        # 检查输入是否已经是复数，如果不是，则将其视为复数的实部
+        if not torch.is_complex(tx):
+            tx_complex = torch.complex(tx, torch.zeros_like(tx))
+        else:
+            tx_complex = tx # 如果输入已经是复数则直接使用
+
+        # 生成复高斯随机变量作为信道系数 h ~ CN(0,1)
+        # h 的形状应与 tx 兼容，通常是在 batch 和 seq_len 维度上独立衰落
+        h_real = torch.randn_like(tx_complex.real) / math.sqrt(2)
+        h_imag = torch.randn_like(tx_complex.imag) / math.sqrt(2)
+        h = torch.complex(h_real, h_imag) # h: [batch, seq_len, latent_dim]
+
+        # 添加复高斯噪声 n ~ CN(0, n_var)
+        # 注意：n_var 是复噪声的总方差 E[|n|^2] = E[n_r^2] + E[n_i^2] = 2 * sigma^2
+        # 因此，实部和虚部的方差各为 n_var / 2
+        noise_std_per_dim = math.sqrt(n_var / 2)
+        noise_real = torch.randn_like(tx_complex.real) * noise_std_per_dim
+        noise_imag = torch.randn_like(tx_complex.imag) * noise_std_per_dim
         noise = torch.complex(noise_real, noise_imag)
-        
-        # 信道传播
-        tx_complex = torch.complex(tx, torch.zeros_like(tx))
+
+        # 信道传播: y = h*x + n
         rx_complex = h * tx_complex + noise
-        
-        # 信道均衡（假设完美CSI）
+
+        # 信道均衡（假设完美CSI） y_eq = y / h = y * conj(h) / |h|^2
         if self.perfect_csi:
-            rx_complex = rx_complex / h.clamp_abs(min=1e-8)
-        
-        # 返回实部
-        return rx_complex.real
+            # 计算 h 的幅度平方 |h|^2
+            h_abs_sq = h.abs().pow(2)
+            # 使用 clamp_min 保证分母不为零 (Tensor 有 clamp_min 方法)
+            h_abs_sq_clamped = h_abs_sq.clamp_min(1e-9) # 使用更小的 epsilon 防止数值问题
+            # 执行均衡: y * conj(h) / |h|^2_clamped
+            rx_equalized = rx_complex * h.conj() / h_abs_sq_clamped
+        else:
+            # 如果没有完美 CSI，则直接返回接收信号（未均衡）
+            rx_equalized = rx_complex
+
+        # 返回接收信号的实部 (或均衡后的实部)
+        # 如果下游模块期望实数输入，则取实部
+        # 如果下游可以处理复数，可以考虑返回 rx_equalized
+        return rx_equalized.real
 
 @register_channel('RICIAN')
 class RicianChannel(BaseChannel):
     """
-    莱斯衰落信道
-    
+    莱斯衰落信道 (已修复 clamp_abs 错误)
+
     模型: y = h*x + n，其中h服从莱斯分布，n ~ CN(0,n_var)
-    
+
     参数:
         K: 莱斯K因子，表示视距分量与散射分量的功率比
         perfect_csi: 是否假设完美信道状态信息
     """
     def __init__(self, K: float = 1.0, perfect_csi: bool = True):
         super().__init__()
+        # 验证 K 因子是否有效
+        if K < 0:
+            raise ValueError("莱斯 K 因子必须是非负数。")
         self.K = K
         self.perfect_csi = perfect_csi
 
     def forward(self, tx: torch.Tensor, n_var: float) -> torch.Tensor:
         """
         莱斯信道传播
-        
+
         参数:
-            tx: [batch, seq_len, latent_dim] 发送符号
+            tx: [batch, seq_len, latent_dim] 发送符号 (假定为实数)
             n_var: 噪声方差
-            
+
         返回:
-            [batch, seq_len, latent_dim] 接收符号
+            [batch, seq_len, latent_dim] 接收符号 (实数部分)
         """
+        # 检查输入是否已经是复数
+        if not torch.is_complex(tx):
+            tx_complex = torch.complex(tx, torch.zeros_like(tx))
+        else:
+            tx_complex = tx
+
         # 计算莱斯分布参数
-        nlos_power = 1 / (self.K + 1)  # 非视距分量功率
-        los_power = self.K / (self.K + 1)  # 视距分量功率
-        
-        # 生成信道系数
-        h_nlos_real = torch.randn_like(tx) * math.sqrt(nlos_power/2)
-        h_nlos_imag = torch.randn_like(tx) * math.sqrt(nlos_power/2)
-        
-        # 视距分量（确定性）
-        h_los_real = torch.ones_like(tx) * math.sqrt(los_power)
-        h_los_imag = torch.zeros_like(tx)
-        
-        # 合并视距和非视距分量
+        # 总功率归一化为 1, 即 E[|h|^2] = los_power + nlos_power = 1
+        los_power = self.K / (self.K + 1)  # 视距(LoS)分量功率
+        nlos_power = 1 / (self.K + 1) # 非视距(NLoS)散射分量功率
+
+        # 生成非视距分量 h_nlos ~ CN(0, nlos_power)
+        h_nlos_real = torch.randn_like(tx_complex.real) * math.sqrt(nlos_power / 2)
+        h_nlos_imag = torch.randn_like(tx_complex.imag) * math.sqrt(nlos_power / 2)
+
+        # 生成视距分量 h_los (确定性部分，幅度为 sqrt(los_power)，相位通常设为0)
+        # 这里假设 LoS 分量的均值为 sqrt(los_power) + 0j
+        h_los_real = torch.full_like(tx_complex.real, math.sqrt(los_power))
+        h_los_imag = torch.zeros_like(tx_complex.imag)
+
+        # 合并视距和非视距分量 h = h_los + h_nlos
         h_real = h_los_real + h_nlos_real
         h_imag = h_los_imag + h_nlos_imag
         h = torch.complex(h_real, h_imag)
-        
-        # 添加噪声
-        noise_real = torch.randn_like(tx) * math.sqrt(n_var/2)
-        noise_imag = torch.randn_like(tx) * math.sqrt(n_var/2)
+
+        # 添加复高斯噪声 n ~ CN(0, n_var)
+        noise_std_per_dim = math.sqrt(n_var / 2)
+        noise_real = torch.randn_like(tx_complex.real) * noise_std_per_dim
+        noise_imag = torch.randn_like(tx_complex.imag) * noise_std_per_dim
         noise = torch.complex(noise_real, noise_imag)
-        
-        # 信道传播
-        tx_complex = torch.complex(tx, torch.zeros_like(tx))
+
+        # 信道传播: y = h*x + n
         rx_complex = h * tx_complex + noise
-        
-        # 信道均衡
+
+        # 信道均衡（假设完美CSI） y_eq = y * conj(h) / |h|^2
         if self.perfect_csi:
-            rx_complex = rx_complex / h.clamp_abs(min=1e-8)
-        
+            h_abs_sq = h.abs().pow(2)
+            h_abs_sq_clamped = h_abs_sq.clamp_min(1e-9) # 使用 clamp_min
+            rx_equalized = rx_complex * h.conj() / h_abs_sq_clamped
+        else:
+            rx_equalized = rx_complex
+
         # 返回实部
-        return rx_complex.real
+        return rx_equalized.real
 
 @register_channel('ERASURE')
 class ErasureChannel(BaseChannel):

@@ -311,10 +311,10 @@ python -m scripts.evaluate \
 ```bash
 python -m scripts.finetune \
     ckpt_path=checkpoints_phase/best_model.pt \
-    mode=channel \
-    new_channel=RAYLEIGH \
+    finetune.mode=channel \
+    finetune.new_channel=RAYLEIGH \
     strict_model=True \
-    ft.epochs=5
+    finetune.epochs=5
 ```
 
 迁移学习完成后，将生成新的检查点，如 `finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt`。
