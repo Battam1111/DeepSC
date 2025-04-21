@@ -322,7 +322,6 @@ python -m scripts.finetune \
 ### 5. 在瑞利信道上评估迁移模型
 
 ```bash
-# 将 Y 和 Z 替换为实际的迁移模型轮数和BLEU分数
 python -m scripts.evaluate \
     ckpt_path=outputs/2025-04-21/20-14-00/checkpoints/best_model.ckpt \
     strict_model=True \
