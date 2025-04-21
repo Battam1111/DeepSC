@@ -33,7 +33,21 @@ def main(cfg: DictConfig):
 
     # ---------- 2. 加载模型 & 数据 ----------
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    lit    = LitDeepSC.load_from_checkpoint(ckpt_path, cfg=cfg).to(device).eval()
+    
+    # 兼容性加载模型
+    try:
+        # 新版加载方式
+        lit = LitDeepSC.load_from_checkpoint(ckpt_path, cfg=cfg)
+    except Exception as e:
+        print(f"使用新方法加载失败，尝试兼容模式: {e}")
+        # 加载原始检查点文件
+        checkpoint = torch.load(ckpt_path, map_location='cpu')
+        # 手动创建模型并加载状态
+        lit = LitDeepSC(cfg)
+        lit.load_state_dict(checkpoint['state_dict'])
+        
+    lit = lit.to(device).eval()
+    
     vocab  = Vocab.load(vocab_json)
 
     loader = make_dataloader(

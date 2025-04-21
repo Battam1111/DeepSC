@@ -6,5 +6,7 @@ defaults:
   - data: europarl
   - train: awgn
 
+ckpt_path: lightning_logs/version_0/checkpoints/best-epoch=10-val_bleu=0.058.ckpt
+
 seed: 42
 precision: 16        # AMP 自动混合精度

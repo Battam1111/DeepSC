@@ -1,0 +1,11 @@
+# configs/model/jscc.yaml - JSCC 基线配置
+# ---- BiLSTM 参数 ----
+vocab_size: ${data.vocab_size}
+pad_idx: ${data.pad_idx}
+embed_dim: 256
+hidden_dim: 512
+lstm_layers: 2
+dropout: 0.1
+
+# ---- Channel Enc/Dec ----
+latent_dim: 16    # 与 DeepSC 保持一致

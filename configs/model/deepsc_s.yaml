@@ -1,0 +1,15 @@
+# configs/model/deepsc_s.yaml - 语音语义通信系统配置
+# ---- 音频处理 ----
+audio_sample_rate: 16000
+audio_frame_length: 32000  # 2秒
+audio_n_mels: 128
+
+# ---- Transformer 主体 ----
+d_model: 512
+n_layers: 3      # 论文 Table I
+n_heads: 8
+d_ff: 2048
+dropout: 0.1
+
+# ---- Channel Enc/Dec ----
+latent_dim: 16    # 符合论文

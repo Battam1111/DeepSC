@@ -1,17 +1,26 @@
-# -*- coding: utf-8 -*-
-"""
-符号功率归一化（论文中的 PowerNormalize）
-"""
-
+# deepsc/utils/power_norm.py - 改进的功率归一化
 import torch
 
-def power_normalize(x: torch.Tensor,
-                    target_power: float = 1.0) -> torch.Tensor:
+def power_normalize(x: torch.Tensor, target_power: float = 1.0, dim: int = -1) -> torch.Tensor:
     """
     将特征整体发射功率归一化到 target_power
-    论文式：P_out = P_in / RMS(x)^2 * target
+    
+    根据论文公式：x = √(target_power) * x / ||x||
+    其中 ||x|| 是均方根功率。
+    
+    参数:
+        x: 输入张量，形状任意
+        target_power: 目标平均功率，默认为1.0
+        dim: 沿哪个维度计算功率，默认为最后一个维度
+        
+    返回:
+        功率归一化后的张量，形状与输入相同
     """
-    # RMS power
-    rms = x.pow(2).mean().sqrt().clamp_min(1e-9)
-    scale = (target_power ** 0.5) / rms
+    # 计算均方根功率: √(1/N * Σ|x_i|²)
+    rms = torch.sqrt(torch.mean(x.pow(2), dim=dim, keepdim=True).clamp_min(1e-9))
+    
+    # 缩放因子: √(target_power) / rms
+    scale = torch.sqrt(torch.tensor(target_power, device=x.device)) / rms
+    
+    # 缩放输入
     return x * scale
