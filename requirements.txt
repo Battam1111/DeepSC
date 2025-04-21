@@ -1,10 +1,42 @@
+# requirements.txt
+
+# --- Core ML & Frameworks ---
+# PyTorch: 核心深度学习库
 torch>=2.0
-torchdata                                         # 新增
+# PyTorch Lightning: 训练框架，简化训练流程
 pytorch-lightning>=2.2
-hydra-core
-nltk
-w3lib
-tqdm
-scikit-learn
+# Transformers: Hugging Face库，用于加载预训练模型（如BERT）和分词器
 transformers>=4.38
+# SentencePiece: Transformers 常用的分词后端库
 sentencepiece
+
+# --- Data Handling ---
+# TorchData: 提供高级数据加载功能，如 bucketbatch (用于优化变长序列批处理)
+torchdata
+# Pandas: 用于处理和保存评估结果 (如CSV文件)
+pandas
+
+# --- Configuration ---
+# Hydra: 强大的配置管理工具
+hydra-core
+
+# --- Evaluation & Metrics ---
+# NLTK: 自然语言工具包，用于计算 BLEU 分数
+nltk
+# Scikit-learn: 机器学习库，这里用于句子向量的 L2 归一化
+scikit-learn
+# Matplotlib: 用于绘制性能曲线图
+matplotlib
+# Tabulate: 可选，用于在终端美化输出表格 (evaluate.py 中有使用)
+tabulate
+
+# --- Traditional Baselines (若需运行 compare_baselines.py 脚本) ---
+# Galois: 有限域计算库，用于实现 Reed-Solomon (RS) 码基线
+# 如果不运行涉及 RS 码的比较，此库可以不安装，但脚本会打印警告
+galois
+
+# --- Utilities ---
+# TQDM: 进度条库，用于显示训练和评估过程
+tqdm
+# W3lib: 通常用于Web数据提取，在此项目中的具体用途不明确，但保留以防万一
+w3lib
