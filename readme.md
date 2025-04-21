@@ -383,7 +383,7 @@ python -m scripts.finetune \
 ```
 
 以上所有命令都可以通过添加 `trainer.precision=16` 参数来启用混合精度训练，加速训练过程。
-```
+
 
 ## ❓ 常见问题 (FAQ)
 
