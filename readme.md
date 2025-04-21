@@ -342,7 +342,7 @@ python -m scripts.compare_baselines \
 
 # 比较 Rayleigh 信道上的性能
 python -m scripts.compare_baselines \
-    ckpt_path=finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt \
+    ckpt_path=outputs/2025-04-21/20-14-00/checkpoints/best_model.ckpt \
     strict_model=True \
     data.channel=RAYLEIGH
 ```

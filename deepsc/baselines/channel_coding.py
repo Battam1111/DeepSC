@@ -13,7 +13,7 @@
 注意：这些是简化实现，主要用于概念验证和效果比较。
 """
 import numpy as np
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Union, Any
 
 # --- 新增: 导入 galois 库 ---
 # 尝试导入，即使在 __init__ 中有 try-except，顶层导入确保
@@ -25,6 +25,25 @@ except ImportError:
     _GALOIS_INSTALLED = False
     # 在后续代码中，我们将使用 self._galois_available 来判断实例是否能用Galois，
     # 但 _GALOIS_INSTALLED 可用于静态检查或避免 NameError。
+
+# --- 新增: 处理 FieldArray 的工具函数 ---
+def is_field_array(arr: Any) -> bool:
+    """检查对象是否是 galois.FieldArray 类型"""
+    return (hasattr(arr, '__class__') and 
+            hasattr(arr, 'view') and 
+            'FieldArray' in arr.__class__.__name__)
+
+def ensure_numpy_array(arr: Any) -> np.ndarray:
+    """
+    确保输入是标准 NumPy 数组而非 galois.FieldArray
+    
+    如果输入是 FieldArray，则转换为标准 NumPy 数组
+    否则原样返回
+    """
+    if is_field_array(arr):
+        # 转换 FieldArray 为标准 NumPy 数组
+        return arr.view(np.ndarray)
+    return arr
 
 class ChannelCoder:
     """信道编码器基类"""
@@ -430,6 +449,9 @@ class RSCoder(ChannelCoder):
         if bits.ndim != 2:
             raise ValueError(f"输入比特数组必须是二维 [batch_size, bit_length]，但得到 {bits.ndim}维")
 
+        # 确保输入是标准 NumPy 数组
+        bits = ensure_numpy_array(bits)
+
         batch_size = bits.shape[0]
         encoded_symbol_batches = []
         original_bit_lengths = [] # 记录原始比特长度
@@ -437,6 +459,9 @@ class RSCoder(ChannelCoder):
 
         for i in range(batch_size):
             current_bits = bits[i]
+            # 确保 current_bits 是标准 NumPy 数组
+            current_bits = ensure_numpy_array(current_bits)
+            
             num_bits = len(current_bits)
             original_bit_lengths.append(num_bits)
 
@@ -451,10 +476,12 @@ class RSCoder(ChannelCoder):
 
             # 将比特重新塑形为字节 (使用 np.packbits)
             try:
-                # np.packbits 需要明确的 uint8 类型
-                int_symbols = np.packbits(padded_bits)
+                # np.packbits 需要明确的 uint8 类型，确保转换为标准NumPy数组
+                int_symbols = np.packbits(ensure_numpy_array(padded_bits))
             except ValueError as e:
                 print(f"错误: Batch {i}, 比特流长度 {len(padded_bits)} 无法打包. Error: {e}")
+                import traceback
+                traceback.print_exc()  # 打印堆栈跟踪
                 encoded_symbol_batches.append(np.array([], dtype=np.uint8))
                 continue
 
@@ -470,11 +497,18 @@ class RSCoder(ChannelCoder):
                 # 使用 Galois 库编码或简化编码
                 if self._galois_available:
                     try:
+                        # 确保输入是标准NumPy数组
+                        segment = ensure_numpy_array(segment)
                         # 使用 Galois 库进行编码
                         # 确保输入类型正确 (Galois 可能需要特定的整数类型)
-                        encoded_segment = self.rs_coder.encode(segment.astype(self.gf.dtypes[0]))
+                        segment_gf = self.gf(segment.astype(np.uint8))  # 转换为GF域元素
+                        encoded_segment = self.rs_coder.encode(segment_gf)
+                        # 立即转换回标准NumPy数组
+                        encoded_segment = ensure_numpy_array(encoded_segment)
                     except Exception as e_galois_enc:
                         print(f"警告: Galois RS 编码失败 at Batch={i}, Segment={j//self.k}: {e_galois_enc}")
+                        import traceback
+                        traceback.print_exc()  # 打印堆栈跟踪
                         # 退化到简化编码
                         encoded_segment = self._reed_solomon_encode_simplified(segment)
                 else:
@@ -485,7 +519,7 @@ class RSCoder(ChannelCoder):
             # 3. 合并所有编码段
             if encoded_segments:
                 # 在合并前，确保所有段都是 NumPy 数组 (Galois 可能返回自己的数组类型)
-                encoded_segments_np = [np.array(seg) for seg in encoded_segments]
+                encoded_segments_np = [ensure_numpy_array(seg) for seg in encoded_segments]
                 encoded_symbols = np.concatenate(encoded_segments_np).astype(np.uint8) # 确保是uint8
                 encoded_symbol_batches.append(encoded_symbols)
             else:
@@ -521,7 +555,7 @@ class RSCoder(ChannelCoder):
              decoded_symbols[:copy_len] = received_symbols
         else:
              decoded_symbols = received_symbols[:self.k] # 假设信息在前 k 个符号
-        decode_successful = True # 简化版总是“成功”
+        decode_successful = True # 简化版总是"成功"
         return decoded_symbols, decode_successful
 
     def decode(self, received_signal: np.ndarray, **kwargs) -> np.ndarray:
@@ -537,14 +571,18 @@ class RSCoder(ChannelCoder):
         """
         if received_signal.ndim != 2:
              raise ValueError(f"输入符号数组必须是二维 [batch_size, encoded_symbol_length]，但得到 {received_signal.ndim}维")
-        if not np.issubdtype(received_signal.dtype, np.integer):
-             print(f"警告: RS解码器期望接收整数符号(字节)，但收到类型 {received_signal.dtype}。将尝试转换为 uint8。")
+        
+        # 确保输入是标准NumPy数组
+        received_symbols = ensure_numpy_array(received_signal)
+        
+        if not np.issubdtype(received_symbols.dtype, np.integer):
+             print(f"警告: RS解码器期望接收整数符号(字节)，但收到类型 {received_symbols.dtype}。将尝试转换为 uint8。")
              try:
-                 received_symbols = received_signal.astype(np.uint8)
+                 received_symbols = received_symbols.astype(np.uint8)
              except ValueError as e_type:
                  raise TypeError(f"无法将接收信号转换为uint8: {e_type}") from e_type
         else:
-             received_symbols = received_signal.astype(np.uint8) # 确保是 uint8
+             received_symbols = received_symbols.astype(np.uint8) # 确保是 uint8
 
         batch_size = received_symbols.shape[0]
         decoded_bit_batches = []
@@ -566,6 +604,9 @@ class RSCoder(ChannelCoder):
 
         for i in range(batch_size):
             current_received_symbols = received_symbols[i] # 已经是 uint8
+            # 确保当前批次符号是标准NumPy数组
+            current_received_symbols = ensure_numpy_array(current_received_symbols)
+            
             original_length_bits = original_bit_lengths[i] if i < len(original_bit_lengths) else 0
 
             # --- 分段解码 ---
@@ -599,9 +640,14 @@ class RSCoder(ChannelCoder):
 
                 if self._galois_available:
                     try:
+                        # 确保输入是标准NumPy数组
+                        segment = ensure_numpy_array(segment)
+                        # 转换为 GF 域元素
+                        segment_gf = self.gf(segment.astype(np.uint8))
                         # Galois 解码，返回解码后的信息符号 (k个)
-                        # 确保输入类型正确
-                        decoded_segment = self.rs_coder.decode(segment.astype(self.gf.dtypes[0]))
+                        decoded_segment_gf = self.rs_coder.decode(segment_gf)
+                        # 立即转换为标准NumPy数组
+                        decoded_segment = ensure_numpy_array(decoded_segment_gf)
                         # decode_successful = True
                     except galois.errors.ReedSolomonError as e:
                         # 解码失败 (错误数超过 t)
@@ -612,11 +658,15 @@ class RSCoder(ChannelCoder):
                         # total_decode_successful = False
                     except TypeError as te: # 捕获可能的类型错误
                         print(f"错误: RS解码时发生TypeError (Galois) at Batch={i}, Segment={j//self.n}: {te}")
+                        import traceback
+                        traceback.print_exc()  # 打印堆栈跟踪
                         decoded_segment = np.zeros(self.k, dtype=np.uint8)
                         # decode_successful = False
                         # total_decode_successful = False
                     except Exception as e_other: # 捕获其他可能的 Galois 错误
                         print(f"错误: RS解码时发生未知错误 (Galois) at Batch={i}, Segment={j//self.n}: {e_other}")
+                        import traceback
+                        traceback.print_exc()  # 打印堆栈跟踪
                         decoded_segment = np.zeros(self.k, dtype=np.uint8)
                         # decode_successful = False
                         # total_decode_successful = False
@@ -624,20 +674,21 @@ class RSCoder(ChannelCoder):
                     # 使用简化占位符解码
                     decoded_segment, _ = self._reed_solomon_decode_simplified(segment)
 
-                # 确保解码段是 NumPy uint8 类型
-                if not isinstance(decoded_segment, np.ndarray):
-                     decoded_segment = np.array(decoded_segment)
-                decoded_symbol_segments.append(decoded_segment.astype(np.uint8))
-
+                # 确保解码段是 NumPy uint8 类型（关键）
+                decoded_segment = ensure_numpy_array(decoded_segment).astype(np.uint8)
+                decoded_symbol_segments.append(decoded_segment)
 
             # --- 合并解码段并转换回比特 ---
             if decoded_symbol_segments:
                 # 合并所有解码出的信息符号段 (每个段长 k)
                 try:
-                     # 在合并前确保所有段都是 NumPy 数组
+                     # 在合并前确保所有段都是标准NumPy数组
+                     decoded_symbol_segments = [ensure_numpy_array(seg).astype(np.uint8) for seg in decoded_symbol_segments]
                      decoded_symbols = np.concatenate(decoded_symbol_segments)
                 except ValueError as e_concat:
                      print(f"错误: Batch {i}, 合并解码符号段时出错: {e_concat}")
+                     import traceback
+                     traceback.print_exc()  # 打印堆栈跟踪
                      # 发生错误，生成一个全零的比特序列作为后备
                      decoded_bits = np.zeros(original_length_bits, dtype=int)
                      decoded_bit_batches.append(decoded_bits)
@@ -645,11 +696,15 @@ class RSCoder(ChannelCoder):
 
                 # 将解码后的符号（字节 uint8）转换回比特流
                 try:
+                    # 关键：确保输入是标准NumPy数组
+                    decoded_symbols = ensure_numpy_array(decoded_symbols).astype(np.uint8)
                     # np.unpackbits 要求输入是 uint8
                     # 输出是 [N_symbols * 8] 的比特数组
                     decoded_bits = np.unpackbits(decoded_symbols)
                 except Exception as e_unpack:
                     print(f"错误: Batch {i}, 解码后符号转换回比特时出错: {e_unpack}")
+                    import traceback
+                    traceback.print_exc()  # 打印堆栈跟踪
                     # 发生错误，生成一个全零的比特序列作为后备
                     decoded_bits = np.zeros(original_length_bits, dtype=int)
 
@@ -675,7 +730,6 @@ class RSCoder(ChannelCoder):
                 # 输出一个长度为 original_length_bits 的全零数组
                 decoded_bit_batches.append(np.zeros(original_length_bits, dtype=int))
 
-
         # --- 填充到批次内最大原始比特长度 ---
         if not decoded_bit_batches: return np.array([])
         non_empty_decoded = [dec for dec in decoded_bit_batches if len(dec) > 0]
@@ -692,4 +746,6 @@ class RSCoder(ChannelCoder):
             padded = np.pad(dec_bits, (0, pad_width), mode='constant', constant_values=0)
             padded_decoded_bits.append(padded)
 
-        return np.array(padded_decoded_bits, dtype=int) # 确保输出是整数比特
+        # 最终确保返回标准NumPy数组
+        result = np.array(padded_decoded_bits, dtype=int)
+        return result  # 确保输出是整数比特
