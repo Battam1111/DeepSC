@@ -1,20 +1,25 @@
+# ================================================================================
+# 文件: /home/star/Yanjun/PolyUCourse/DeepSC/configs/train/awgn.yaml
+# (已修改，添加 mine_epochs 参数)
+# --------------------------------------------------------------------------------
 # configs/train/awgn.yaml - 更新的训练配置
 # 文件名：configs/train/awgn.yaml
 batch_size: 128
 lr: 3e-4          # 峰值学习率
 warmup: 8000      # 预热步数
-lr_type: inverse_sqrt  # 学习率调度类型
+lr_type: inverse_sqrt # 学习率调度类型
 epochs: 30
 
 # MINE相关参数
 lambda_mi: 0.01   # 互信息权重，增大以提高互信息影响
 mine_update_freq: 5  # MINE更新频率
 mine_extra_steps: 2  # 每次多训练几步
-mine_warmup: 1000    # MINE预热期
+mine_warmup: 1000    # MINE 预热期
+mine_epochs: 10      # 新增：MINE 预训练轮数 (主要用于严格两阶段训练 train_phase.py)
 
 # SNR范围
-snr_low: 0        # 训练时随机采样的最低SNR(dB)
-snr_high: 15      # 训练时随机采样的最高SNR(dB)
+snr_low: 0           # 训练时随机采样的最低SNR(dB)
+snr_high: 15         # 训练时随机采样的最高SNR(dB)
 
 # 梯度裁剪
-grad_clip: 1.0    # 梯度裁剪值
+grad_clip: 1.0       # 梯度裁剪值
