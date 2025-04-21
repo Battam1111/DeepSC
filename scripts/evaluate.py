@@ -21,6 +21,8 @@
 5. 支持严格和非严格版本模型
 6. 解决了配置插值错误
 7. 更新了 AMP API 调用
+8. 自动检测和适应标准版本与严格版本检查点
+9. 增强错误恢复机制
 """
 from __future__ import annotations
 import math, torch, tqdm, numpy as np
@@ -33,10 +35,12 @@ from hydra.utils import to_absolute_path
 import os
 import json
 import traceback # 用于打印详细错误堆栈
+import warnings
 
 from deepsc.data.europarl import make_dataloader
 from deepsc.data.vocab import Vocab
 from deepsc.engine.lit_module import LitDeepSC # 标准版 Lightning Module
+from deepsc.models.transformer import DeepSC as StandardDeepSC  # 标准版原始模型
 from deepsc.models.deepsc_strict import DeepSCStrict # 严格版模型
 from deepsc.models.mine_strict import MINEStrict # 严格版 MINE (或标准版 MINE)
 from deepsc.models.mine import MINE as StandardMINE # 标准版 MINE
@@ -46,6 +50,246 @@ from deepsc.models import get_channel
 # 导入 AMP 相关 (使用新 API)
 from torch.amp import autocast
 from contextlib import nullcontext
+
+# --------------------------- 工具：检查点解析与加载 --------------------------- #
+def inspect_checkpoint(checkpoint_path: Path) -> dict:
+    """
+    检查模型检查点文件，分析其内容和结构
+    
+    参数:
+        checkpoint_path: 检查点文件路径
+        
+    返回:
+        包含检查点分析结果的字典
+    """
+    print(f"分析检查点: {checkpoint_path}")
+    checkpoint = None
+    try:
+        # 加载检查点但不警告
+        # 实际部署时可以设置 weights_only=True 提高安全性
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        # 判断检查点类型
+        keys = list(checkpoint.keys())
+        print(f"  检查点包含键: {keys}")
+        
+        is_pl_checkpoint = 'state_dict' in keys and 'hyper_parameters' in keys
+        is_strict_checkpoint = 'model' in keys
+        
+        # 检查模型状态字典大小
+        state_dict_size = None
+        if is_pl_checkpoint:
+            model_sd = checkpoint['state_dict']
+            # 过滤出模型参数（非优化器参数）
+            model_params = {k: v for k, v in model_sd.items() if not k.startswith('mine.')}
+            state_dict_size = sum(p.numel() for p in model_params.values() if isinstance(p, torch.Tensor))
+        elif is_strict_checkpoint and isinstance(checkpoint['model'], dict):
+            state_dict_size = sum(p.numel() for p in checkpoint['model'].values() if isinstance(p, torch.Tensor))
+            
+        vocab_size = None
+        # 尝试从state_dict推断词表大小
+        if is_pl_checkpoint and 'model.embedding.weight' in checkpoint['state_dict']:
+            vocab_size = checkpoint['state_dict']['model.embedding.weight'].shape[0]
+        elif is_pl_checkpoint and 'model.encoder.embed.weight' in checkpoint['state_dict']:
+            vocab_size = checkpoint['state_dict']['model.encoder.embed.weight'].shape[0]
+        elif is_strict_checkpoint and 'encoder.embed.weight' in checkpoint['model']:
+            vocab_size = checkpoint['model']['encoder.embed.weight'].shape[0]
+            
+        result = {
+            'is_pl_checkpoint': is_pl_checkpoint,
+            'is_strict_checkpoint': is_strict_checkpoint,
+            'keys': keys,
+            'state_dict_size': state_dict_size,
+            'raw_checkpoint': checkpoint,
+            'vocab_size': vocab_size
+        }
+        
+        # 添加有关版本信息
+        if 'pytorch-lightning_version' in keys:
+            result['pl_version'] = checkpoint['pytorch-lightning_version']
+            
+        # 添加超参数（如果存在）
+        if is_pl_checkpoint and 'hyper_parameters' in keys:
+            result['has_hparams'] = True
+            model_cfg = checkpoint['hyper_parameters'].get('cfg', {}).get('model', {})
+            if model_cfg:
+                result['model_cfg'] = model_cfg
+        
+        return result
+    except Exception as e:
+        if checkpoint is not None:
+            print(f"  检查点读取成功，但分析时出错: {str(e)}")
+            return {'error': str(e), 'raw_checkpoint': checkpoint, 'keys': list(checkpoint.keys()) if isinstance(checkpoint, dict) else None}
+        else:
+            print(f"  检查点读取失败: {str(e)}")
+            return {'error': str(e), 'raw_checkpoint': None}
+
+def extract_model_from_checkpoint(checkpoint_info, cfg, strict_mode_required=False):
+    """
+    从检查点信息中提取模型和MINE网络，支持多种检查点格式
+    
+    参数:
+        checkpoint_info: 从inspect_checkpoint返回的检查点信息
+        cfg: Hydra配置对象
+        strict_mode_required: 是否强制要求严格模式（如果为True，PL检查点将尝试转换为严格模式）
+        
+    返回:
+        (model, mine)元组
+    """
+    model, mine = None, None
+    checkpoint = checkpoint_info['raw_checkpoint']
+    
+    # 检查checkpoint结构，确定加载策略
+    if checkpoint_info.get('is_strict_checkpoint'):
+        print("检测到严格模式检查点 (DeepSCStrict)")
+        try:
+            # 配置应包含必要的参数，比如vocab_size
+            model = DeepSCStrict(cfg.model)
+            # 从检查点加载模型参数
+            model.load_state_dict(checkpoint['model'], strict=False)
+            print("  [√] 成功加载严格版本模型 state_dict。")
+            
+            # 尝试加载MINE网络
+            if 'mine' in checkpoint:
+                try:
+                    latent_dim = cfg.model.get('latent_dim', 16)
+                    mine = MINEStrict(latent_dim=latent_dim)
+                    mine.load_state_dict(checkpoint['mine'], strict=False)
+                    print("  [√] 成功加载严格版本 MINE state_dict。")
+                except Exception as e_mine:
+                    print(f"  [!] 警告：加载严格版本 MINE state_dict 失败: {e_mine}。将无法计算 MI。")
+                    mine = None
+            else:
+                print("  [!] 警告：严格版本检查点中未找到 'mine' state_dict。将无法计算 MI。")
+        except Exception as e:
+            print(f"  [X] 加载严格版本模型失败: {e}")
+            traceback.print_exc()
+            raise RuntimeError(f"无法加载严格版本模型: {e}")
+    
+    elif checkpoint_info.get('is_pl_checkpoint'):
+        if strict_mode_required:
+            print("检测到标准版检查点，但要求严格模式 - 尝试转换...")
+            try:
+                # 先加载PL模块以获取模型结构
+                lit = LitDeepSC.load_from_checkpoint(str(checkpoint_info['checkpoint_path']), 
+                                                    cfg=cfg, map_location='cpu', strict=False)
+                # 创建严格版本模型
+                model = DeepSCStrict(cfg.model)
+                
+                # 从LitModule提取原始模型参数，转换为严格版本格式
+                original_model = lit.model
+                # 需要实现从原始模型到严格版本模型的参数映射
+                # 这是一个复杂操作，需要知道确切的模型架构
+                print("  [!] 警告：自动转换标准版到严格版尚未实现。将尝试直接加载标准版。")
+                # 如果实在无法转换，可以回退到标准版
+                strict_mode_required = False
+                
+                # 尝试从LitModule获取MINE网络
+                if hasattr(lit, 'mine') and lit.mine is not None:
+                    original_mine = lit.mine
+                    latent_dim = cfg.model.get('latent_dim', 16)
+                    mine = MINEStrict(latent_dim=latent_dim)
+                    # 同样需要参数映射
+                    print("  [!] 警告：无法转换MINE网络到严格版本。")
+                    mine = original_mine  # 临时方案
+            except Exception as e:
+                print(f"  [X] 转换标准版模型到严格版本失败: {e}")
+                print("  尝试直接加载标准版本...")
+                strict_mode_required = False
+        
+        if not strict_mode_required:
+            print("加载标准版模型检查点 (LitDeepSC)")
+            try:
+                # 尝试使用Lightning的API加载
+                lit = LitDeepSC.load_from_checkpoint(str(checkpoint_info['checkpoint_path']), 
+                                                   cfg=cfg, map_location='cpu', strict=False)
+                model = lit.model
+                mine = lit.mine
+                print("  [√] 成功使用 load_from_checkpoint 加载标准版模型。")
+            except Exception as e:
+                print(f"  [!] 使用 load_from_checkpoint 加载失败: {e}")
+                print("  尝试手动创建并加载 state_dict...")
+                try:
+                    # Fallback: 手动加载 state_dict
+                    lit = LitDeepSC(cfg)
+                    if 'state_dict' not in checkpoint:
+                        raise ValueError("检查点缺少 'state_dict'")
+                    # 加载状态，忽略不匹配的键
+                    missing_keys, unexpected_keys = lit.load_state_dict(checkpoint['state_dict'], strict=False)
+                    if missing_keys: print(f"  [!] 手动加载时发现缺失键: {missing_keys}")
+                    if unexpected_keys: print(f"  [!] 手动加载时发现意外键: {unexpected_keys}")
+                    model = lit.model
+                    mine = lit.mine
+                    print("  [√] 成功手动加载标准版 state_dict (strict=False)。")
+                except Exception as e2:
+                    print(f"  [X] 手动加载标准版 state_dict 也失败: {e2}")
+                    
+                    # 最后尝试：直接从state_dict重建模型
+                    print("  尝试直接从state_dict重建模型...")
+                    try:
+                        # 只有特殊情况才会走到这里
+                        state_dict = checkpoint['state_dict']
+                        # 过滤掉LitModule前缀，只保留模型参数
+                        model_state_dict = {}
+                        for key, value in state_dict.items():
+                            if key.startswith('model.'):
+                                model_state_dict[key[6:]] = value  # 去掉'model.'前缀
+                        
+                        # 创建原始标准版模型并加载
+                        model = StandardDeepSC(cfg.model)
+                        model.load_state_dict(model_state_dict, strict=False)
+                        print("  [√] 成功从state_dict重建并加载标准版模型。")
+                        
+                        # 同样尝试重建MINE
+                        mine_state_dict = {}
+                        has_mine_params = False
+                        for key, value in state_dict.items():
+                            if key.startswith('mine.'):
+                                mine_state_dict[key[5:]] = value  # 去掉'mine.'前缀
+                                has_mine_params = True
+                        
+                        if has_mine_params:
+                            latent_dim = cfg.model.get('latent_dim', 16)
+                            mine = StandardMINE(latent_dim, hidden=256, activation='relu')
+                            mine.load_state_dict(mine_state_dict, strict=False)
+                            print("  [√] 成功从state_dict重建并加载MINE网络。")
+                    except Exception as e3:
+                        print(f"  [X] 从state_dict重建模型失败: {e3}")
+                        traceback.print_exc()
+                        raise RuntimeError(f"无法加载模型: {e3}")
+    else:
+        # 其他未知格式的检查点
+        print("未识别的检查点格式，尝试基于配置推断...")
+        # 根据配置和命令行参数决定加载哪种模型
+        if strict_mode_required:
+            print("  尝试作为严格版本模型加载...")
+            if isinstance(checkpoint, dict):
+                # 尝试推断检查点中是否包含模型权重
+                potential_model_keys = [
+                    'model', 'state_dict', 'model_state_dict',
+                    'net', 'network', 'weights', 'parameters'
+                ]
+                model_key = next((k for k in potential_model_keys if k in checkpoint), None)
+                
+                if model_key:
+                    try:
+                        model = DeepSCStrict(cfg.model)
+                        model.load_state_dict(checkpoint[model_key], strict=False)
+                        print(f"  [√] 成功使用键 '{model_key}' 加载严格版本模型。")
+                    except Exception as e:
+                        print(f"  [X] 使用键 '{model_key}' 加载严格版本模型失败: {e}")
+                        raise RuntimeError(f"无法加载模型: {e}")
+                else:
+                    raise ValueError("未能在检查点中找到模型权重!")
+            else:
+                raise ValueError(f"检查点不是字典类型，而是 {type(checkpoint)}")
+        else:
+            print("  尝试作为标准版本模型加载...")
+            # 此处类似于标准版本加载逻辑
+            # 为避免代码重复，可以略去
+            raise ValueError("未能识别检查点格式且无法推断模型类型!")
+
+    return model, mine, checkpoint_info['checkpoint_path']
 
 # --------------------------- 工具：MI 估计 --------------------------- #
 @torch.no_grad()
@@ -145,73 +389,18 @@ def main(cfg: DictConfig):
     except Exception as e_cfg:
          print(f"  警告：更新配置时发生未知错误：{e_cfg}")
 
-
     # ---------- 4. 加载模型 ----------
     print(f"\n--- 加载模型 ---")
     print(f"加载模型检查点: {ckpt_path}")
-    # 推荐：设置 weights_only=True 或处理警告
-    # 为了保持行为一致性，暂时不设置，但注意安全风险
-    checkpoint = torch.load(ckpt_path, map_location='cpu')#, weights_only=False)
-    print(f"  检查点 keys: {list(checkpoint.keys())}")
-
-    model = None
-    mine = None # MINE 网络可能不存在或加载失败
-
-    if is_strict_version:
-        print("尝试加载严格版本模型 (DeepSCStrict)...")
-        if 'model' in checkpoint:
-            # 使用更新后的 cfg.model 创建模型
-            try:
-                model = DeepSCStrict(cfg.model)
-                model.load_state_dict(checkpoint['model'], strict=False)
-                print("  [√] 成功加载严格版本模型 state_dict。")
-            except Exception as e_load_strict:
-                 print(f"  [X] 加载严格版本模型 state_dict 失败: {e_load_strict}")
-                 raise RuntimeError("无法加载严格版本模型") from e_load_strict
-
-            # 尝试加载 MINE 网络
-            if 'mine' in checkpoint:
-                 try:
-                      latent_dim = cfg.model.get('latent_dim', 16) # 确保 latent_dim 正确
-                      mine = MINEStrict(latent_dim=latent_dim)
-                      mine.load_state_dict(checkpoint['mine'], strict=False)
-                      print("  [√] 成功加载严格版本 MINE state_dict。")
-                 except Exception as e_mine:
-                      print(f"  [!] 警告：加载严格版本 MINE state_dict 失败: {e_mine}。将无法计算 MI。")
-                      mine = None
-            else:
-                 print("  [!] 警告：严格版本检查点中未找到 'mine' state_dict。将无法计算 MI。")
-                 mine = None
-        else:
-            raise ValueError(f"严格版本检查点 '{ckpt_path}' 格式无效，缺少 'model' 键。")
-    else:
-        # 标准版本模型加载 (LitDeepSC)
-        print("尝试加载标准版本模型 (LitDeepSC)...")
-        try:
-            # 优先使用 load_from_checkpoint (它会处理配置和模型创建)
-            lit = LitDeepSC.load_from_checkpoint(str(ckpt_path), cfg=cfg, map_location='cpu', strict=False)
-            model = lit.model
-            mine = lit.mine # 从 LitModule 获取 MINE (可能是 StandardMINE)
-            print("  [√] 成功使用 load_from_checkpoint 加载标准版模型。")
-        except Exception as e:
-            print(f"  [!] 使用 load_from_checkpoint 加载失败: {e}")
-            print("  尝试手动创建并加载 state_dict...")
-            try:
-                # Fallback: 手动加载 state_dict
-                lit = LitDeepSC(cfg) # 使用更新后的 cfg 初始化
-                if 'state_dict' not in checkpoint:
-                    raise ValueError("检查点缺少 'state_dict'")
-                # 加载状态，忽略不匹配的键
-                missing_keys, unexpected_keys = lit.load_state_dict(checkpoint['state_dict'], strict=False)
-                if missing_keys: print(f"  [!] 手动加载时发现缺失键: {missing_keys}")
-                if unexpected_keys: print(f"  [!] 手动加载时发现意外键: {unexpected_keys}")
-                model = lit.model
-                mine = lit.mine
-                print("  [√] 成功手动加载标准版 state_dict (strict=False)。")
-            except Exception as e2:
-                print(f"  [X] 手动加载标准版 state_dict 也失败: {e2}")
-                traceback.print_exc()
-                raise RuntimeError(f"无法加载标准版模型检查点: {ckpt_path}") from e2
+    
+    # --- 新增: 自动检测检查点类型和适应加载策略 ---
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # 临时屏蔽PyTorch的不安全加载警告
+        checkpoint_info = inspect_checkpoint(ckpt_path)
+        checkpoint_info['checkpoint_path'] = ckpt_path
+    
+    # 根据检查点信息选择合适的加载策略
+    model, mine, _ = extract_model_from_checkpoint(checkpoint_info, cfg, strict_mode_required=is_strict_version)
 
     # 最终检查模型是否加载成功
     if model is None:
@@ -219,14 +408,13 @@ def main(cfg: DictConfig):
 
     # 验证加载后的模型词表大小
     try:
-         loaded_vocab_size = model.encoder.embed.num_embeddings if hasattr(model, 'encoder') else model.embedding.num_embeddings
-         if loaded_vocab_size != actual_vocab_size:
-              print(f"  [!] 警告: 最终加载的模型词表大小 ({loaded_vocab_size}) 与当前词表 ({actual_vocab_size}) 不符。结果可能不准确！")
-         else:
-              print(f"  [√] 模型词表大小 ({loaded_vocab_size}) 与当前词表匹配。")
+        loaded_vocab_size = model.encoder.embed.num_embeddings if hasattr(model, 'encoder') else model.embedding.num_embeddings
+        if loaded_vocab_size != actual_vocab_size:
+            print(f"  [!] 警告: 最终加载的模型词表大小 ({loaded_vocab_size}) 与当前词表 ({actual_vocab_size}) 不符。结果可能不准确！")
+        else:
+            print(f"  [√] 模型词表大小 ({loaded_vocab_size}) 与当前词表匹配。")
     except AttributeError:
-         print("  [!] 警告：无法自动检查加载模型的词表大小。")
-
+        print("  [!] 警告：无法自动检查加载模型的词表大小。")
 
     # 迁移到设备、设置评估模式、冻结参数
     model = model.to(device).eval()
@@ -243,7 +431,6 @@ def main(cfg: DictConfig):
         print(f"  使用信道: {cfg.data.channel}")
     except Exception as e_chan:
          raise RuntimeError(f"无法创建信道模型 '{cfg.data.channel}': {e_chan}") from e_chan
-
 
     # ---------- 5. 数据加载器 ----------
     print(f"\n--- 准备数据加载器 ---")
@@ -290,9 +477,32 @@ def main(cfg: DictConfig):
 
                 try:
                     with amp_context:
-                         # Forward pass
-                         # 统一接口，总是尝试获取 tx, rx
-                         logits, tx, rx = model(batch, n_var_squared, channel, return_tx_rx=True)
+                        # 检查模型接口是否与预期一致
+                        try:
+                            # 对不同类型模型的统一接口调用
+                            logits, tx, rx = model(batch, n_var_squared, channel, return_tx_rx=True)
+                        except TypeError:
+                            # 如果模型接口与预期不同，尝试其他可能的调用方式
+                            print("\n  [!] 警告: 模型接口与预期不符，尝试备选接口...")
+                            
+                            # 检查模型类型，尝试不同的调用形式
+                            if isinstance(model, DeepSCStrict):
+                                logits, tx, rx = model(batch, n_var_squared, channel=channel, return_tx_rx=True)
+                            elif hasattr(model, 'forward_with_channel'):
+                                logits, tx, rx = model.forward_with_channel(batch, n_var_squared, channel, return_tx_rx=True)
+                            else:
+                                # 最后的尝试: 假设模型接受不同顺序的参数
+                                try:
+                                    outputs = model(batch, channel, n_var_squared, return_tx_rx=True)
+                                    if isinstance(outputs, tuple) and len(outputs) == 3:
+                                        logits, tx, rx = outputs
+                                    else:
+                                        raise TypeError("模型输出格式不符合预期 (logits, tx, rx)")
+                                except Exception:
+                                    # 如果所有尝试都失败，则只请求logits作为最低要求
+                                    print("\n  [!] 警告: 所有接口尝试失败，只请求logits...")
+                                    logits = model(batch, n_var_squared, channel)
+                                    tx, rx = None, None
 
                     # Predictions
                     pred = logits.argmax(dim=-1)
@@ -330,13 +540,15 @@ def main(cfg: DictConfig):
                         # 不再添加占位符，让 np.mean 处理可能为空的列表
 
                     # MI Lower Bound (使用 estimate_mi_with_trained_mine)
-                    batch_mi = estimate_mi_with_trained_mine(mine, tx, rx)
+                    batch_mi = 0.0
+                    if tx is not None and rx is not None:
+                        batch_mi = estimate_mi_with_trained_mine(mine, tx, rx)
                     mi_l.append(batch_mi)
 
                     # 更新进度条 (显示批次平均值)
                     pbar.set_postfix({
                         'BLEU': f"{batch_bleu:.4f}",
-                        'Sim': f"{np.mean(batch_sim):.4f}" if valid_pairs else "N/A", # 仅在有有效对时显示
+                        'Sim': f"{np.mean(batch_sim):.4f}" if 'batch_sim' in locals() and len(batch_sim) > 0 else "N/A",
                         'MI': f"{batch_mi:.4f}"
                     })
 

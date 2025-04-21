@@ -324,7 +324,7 @@ python -m scripts.finetune \
 ```bash
 # 将 Y 和 Z 替换为实际的迁移模型轮数和BLEU分数
 python -m scripts.evaluate \
-    ckpt_path=finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt \
+    ckpt_path=outputs/2025-04-21/20-14-00/checkpoints/best_model.ckpt \
     strict_model=True \
     data.channel=RAYLEIGH
 ```
