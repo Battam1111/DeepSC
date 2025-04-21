@@ -1,0 +1,63 @@
+{
+    "0": {
+      "bleu": 0.42,
+      "description": "DeepSC BLEU-1 score at SNR=0dB"
+    },
+    "3": {
+      "bleu": 0.68,
+      "description": "DeepSC BLEU-1 score at SNR=3dB"
+    },
+    "6": {
+      "bleu": 0.89,
+      "description": "DeepSC BLEU-1 score at SNR=6dB"
+    },
+    "9": {
+      "bleu": 0.93,
+      "description": "DeepSC BLEU-1 score at SNR=9dB"
+    },
+    "12": {
+      "bleu": 0.95,
+      "description": "DeepSC BLEU-1 score at SNR=12dB"
+    },
+    "15": {
+      "bleu": 0.96,
+      "description": "DeepSC BLEU-1 score at SNR=15dB"
+    },
+    "18": {
+      "bleu": 0.97,
+      "description": "DeepSC BLEU-1 score at SNR=18dB"
+    },
+    "baselines": {
+      "jscc_6db": {
+        "bleu": 0.81,
+        "description": "JSCC [22] BLEU-1 score at SNR=6dB"
+      },
+      "jscc_12db": {
+        "bleu": 0.93,
+        "description": "JSCC [22] BLEU-1 score at SNR=12dB"
+      },
+      "huffman_turbo_6db": {
+        "bleu": 0.42,
+        "description": "Huffman+Turbo BLEU-1 score at SNR=6dB"
+      },
+      "huffman_turbo_12db": {
+        "bleu": 0.85,
+        "description": "Huffman+Turbo BLEU-1 score at SNR=12dB"
+      },
+      "fixedlen_rs_6db": {
+        "bleu": 0.31,
+        "description": "5-bit+RS BLEU-1 score at SNR=6dB"
+      },
+      "fixedlen_rs_12db": {
+        "bleu": 0.78,
+        "description": "5-bit+RS BLEU-1 score at SNR=12dB"
+      }
+    },
+    "metadata": {
+      "paper_title": "Deep Learning Enabled Semantic Communication Systems",
+      "authors": "Huiqiang Xie, Zhijin Qin, Geoffrey Ye Li, Biing-Hwang Juang",
+      "published": "IEEE Transactions on Signal Processing, VOL. 69, 2021",
+      "metric": "BLEU-1 score (unigram precision)",
+      "channel": "AWGN channel unless otherwise specified"
+    }
+  }

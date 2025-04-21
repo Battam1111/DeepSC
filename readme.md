@@ -273,27 +273,117 @@ DeepSC/
 
 ## 💡 复现论文结果的最佳实践
 
-要尽可能接近论文报告的结果，建议：
+为确保完全复现论文中报告的结果，请严格按照以下步骤操作：
 
-1.  **使用严格版本**: 运行 `scripts/train_phase.py` 进行两阶段训练。
-    ```bash
-    # 示例：设置 MINE 预训练10轮，主网络训练30轮，互信息权重0.01
-    python -m scripts.train_phase train.mine_epochs=10 train.epochs=30 train.lambda_mi=0.01
-    ```
-2.  **核对模型参数**: 确保 `configs/model/deepsc.yaml` 中的参数（如 `n_layers=3`, `n_heads=8`, `d_model`, `d_ff`) 与论文一致。信道编码维度 `k` 在 `model.semantic_encoder` 或 `model.channel_encoder` 中配置 (通常是 `k = n * R`，n是信道使用次数，R是码率，原文 `k=16` 是一个示例)。
-3.  **信噪比范围**: 使用论文中报告的训练 SNR 范围，例如 `train.snr_low=0`, `train.snr_high=15`。
-4.  **先在 AWGN 上训练**: 通常先在 AWGN 信道上获得较好的预训练模型。
-    ```bash
-    python -m scripts.train_phase data.channel=AWGN train.channel.name=AWGN ...
-    ```
-5.  **迁移到其他信道**: 使用 `scripts/finetune.py` 将 AWGN 预训练模型迁移到瑞利等其他信道。
-    ```bash
-    python -m scripts.finetune ckpt_path=checkpoints/best_awgn_model.pt mode=channel train.new_channel=RAYLEIGH train.strict_model=True ...
-    ```
-6.  **与基线比较**: 使用 `scripts/compare_baselines.py` 脚本生成与传统方法（Huffman+Turbo/RS）和 JSCC 的对比结果。
-    ```bash
-    python -m scripts.compare_baselines ckpt_path=checkpoints/best_model_epochX.pt train.strict_model=True
-    ```
+### 1. 数据准备
+
+首先下载并预处理数据集：
+
+```bash
+# 下载并预处理欧洲议会数据集
+bash scripts/download_and_preprocess.sh
+```
+
+### 2. 严格版两阶段训练（AWGN信道）
+
+使用严格版本的两阶段训练方法，完全按照论文描述的流程：
+
+```bash
+# 严格两阶段训练 - AWGN信道
+python -m scripts.train_phase \
+    data.channel=AWGN \
+    train.mine_epochs=10 \
+    train.epochs=30 \
+    train.batch_size=128 \
+    train.lr=3e-4 \
+    train.lambda_mi=0.01 \
+    train.snr_low=0 \
+    train.snr_high=15 \
+    model.n_layers=3 \
+    model.n_heads=8 \
+    model.d_model=512 \
+    model.d_ff=2048 \
+    model.latent_dim=16
+```
+
+训练完成后，将在 `checkpoints/` 目录生成最佳模型检查点，形如 `best_model_epochX.pt`。
+
+### 3. 在AWGN信道上评估模型
+
+```bash
+# 将 X 替换为实际的最佳模型轮数
+python -m scripts.evaluate \
+    ckpt_path=checkpoints/best_model_epochX.pt \
+    strict_model=True \
+    data.channel=AWGN
+```
+
+### 4. 迁移到瑞利信道（论文第二个实验）
+
+使用在AWGN上训练的模型，迁移到瑞利信道：
+
+```bash
+# 将 X 替换为AWGN上训练的最佳模型轮数
+python -m scripts.finetune \
+    ckpt_path=checkpoints/best_model_epochX.pt \
+    mode=channel \
+    new_channel=RAYLEIGH \
+    strict_model=True \
+    ft.epochs=5
+```
+
+迁移学习完成后，将生成新的检查点，如 `finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt`。
+
+### 5. 在瑞利信道上评估迁移模型
+
+```bash
+# 将 Y 和 Z 替换为实际的迁移模型轮数和BLEU分数
+python -m scripts.evaluate \
+    ckpt_path=finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt \
+    strict_model=True \
+    data.channel=RAYLEIGH
+```
+
+### 6. 与传统方法进行比较
+
+为完全复现论文中的对比实验，执行：
+
+```bash
+# 比较 AWGN 信道上的性能
+python -m scripts.compare_baselines \
+    ckpt_path=checkpoints/best_model_epochX.pt \
+    strict_model=True \
+    data.channel=AWGN
+
+# 比较 Rayleigh 信道上的性能
+python -m scripts.compare_baselines \
+    ckpt_path=finetune_channel_RAYLEIGH_ckpts/ft-epochY-bleuZ.pt \
+    strict_model=True \
+    data.channel=RAYLEIGH
+```
+
+### 7. 验证结果
+
+检查生成的评估结果CSV文件和性能曲线，确认SNR=6dB时BLEU分数约为0.89，SNR=12dB时约为0.95，与论文报告一致。曲线应该显示DeepSC相比传统方法在低SNR区域（0-9dB）具有明显优势。
+
+### 8. 域迁移实验（可选，复现论文第三个实验）
+
+如需复现论文中提到的域迁移实验，请准备新的领域数据集，然后执行：
+
+```bash
+# 将 X 替换为AWGN上训练的最佳模型轮数
+python -m scripts.finetune \
+    ckpt_path=checkpoints/best_model_epochX.pt \
+    mode=domain \
+    data.train_pkl=/path/to/new/domain/train.pkl \
+    data.val_pkl=/path/to/new/domain/val.pkl \
+    data.vocab_json=/path/to/new/domain/vocab.json \
+    strict_model=True \
+    ft.epochs=10
+```
+
+以上所有命令都可以通过添加 `trainer.precision=16` 参数来启用混合精度训练，加速训练过程。
+```
 
 ## ❓ 常见问题 (FAQ)
 
